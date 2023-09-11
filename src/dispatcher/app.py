@@ -19,11 +19,11 @@ class MonitorEndpoint:
         try:
             data = request.json
             if not data:
-                return jsonify({'error': 'Data parameter is required'}), 400
+                return jsonify({'error': 'Data parameter is required for series'}), 400
             
             async_task = MonitorEndpoint().async_function(data)
             result = await async_task
-            return jsonify({'result': result})
+            return jsonify({'series': result})
 
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -33,11 +33,11 @@ class MonitorEndpoint:
         try:
             data = request.json
             if not data:
-                return jsonify({'error': 'Data parameter is required'}), 400
+                return jsonify({'error': 'Data parameter is required for movies'}), 400
             
             async_task = MonitorEndpoint().async_function(data)
             result = await async_task
-            return jsonify({'result': result})
+            return jsonify({'movies': result})
 
         except Exception as e:
             return jsonify({'error': str(e)}), 500

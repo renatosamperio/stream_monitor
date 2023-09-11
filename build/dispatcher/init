@@ -1,0 +1,4 @@
+#!/bin/bash
+
+echo "Running stream dispatcher..."
+python /opt/stream_monitor/dispatcher/app.py

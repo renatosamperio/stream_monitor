@@ -113,7 +113,7 @@ class QBitorrent(Runner):
         # pause on going ones
         if not state.startswith("paused"):
           missing = utilities.human_readable_data(size - downloaded)
-          self.logger.info("%s | [%s] at %3.2f%% found running with %s bytes to go"%
+          self.logger.info("%s | [%s] at %3.2f%% - %s"%
                            (state, name, progress*100, str(missing)))
 
           # setting trackers if it would be time
@@ -123,7 +123,7 @@ class QBitorrent(Runner):
               self.torrent_state.update({infohash: time.time()})
 
           # pausing if it is finished
-          elif progress == 1:
+          elif progress == 1 and not state.startswith("moving"):
             self.logger.info("  = Pausing torrent [%s]"%(name))
             self.pause_torrent(name, infohash)
              
