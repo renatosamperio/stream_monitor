@@ -98,23 +98,26 @@ class QBitorrent(Runner):
 
       has_set_trackers = False
       for torrent in self.torrents:
+        # pprint(torrent.keys())
         progress   = torrent["progress"]
         downloaded = torrent["downloaded"]
         size       = torrent["size"]
         state      = torrent["state"]
-        progress   = torrent["progress"]
         name       = torrent["name"]
         completed  = torrent["completed"]
         num_leechs = torrent["num_leechs"]
         num_seeds  = torrent["num_seeds"]
         category   = torrent["category"]
         infohash   = torrent["hash"]
+        dlspeed    = torrent["dlspeed"]
 
         # pause on going ones
         if not state.startswith("paused"):
           missing = utilities.human_readable_data(size - downloaded)
-          self.logger.info("%s | [%s] at %3.2f%% - %s"%
-                           (state, name, progress*100, str(missing)))
+          hDwldSpeed = utilities.human_readable_data(int(dlspeed))
+          is_downloading = " * " if dlspeed>0 else "   "
+          self.logger.info("%s|%12s| %3.2f%% | %s/s | %s | %d/%d | %s "%
+                           (is_downloading, state, progress*100, hDwldSpeed, str(missing), num_seeds, num_leechs, name))
 
           # setting trackers if it would be time
           if self.new_trackers_available and progress < 1:
@@ -124,15 +127,20 @@ class QBitorrent(Runner):
 
           # pausing if it is finished
           elif progress == 1 and not state.startswith("moving"):
-            self.logger.info("  = Pausing torrent [%s]"%(name))
+            self.logger.info("  = = = Pausing torrent [%s]"%(name))
             self.pause_torrent(name, infohash)
              
       # allow all trackers to be defined and avoid updating on next call
       if has_set_trackers:
         self.new_trackers_available = False
       
+      # return status
+      is_ok = True
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
+      is_ok = False
+    finally:
+      return is_ok
 
   def pause_torrent(self, name, infohash):
     try:

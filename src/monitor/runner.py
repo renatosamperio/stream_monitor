@@ -79,10 +79,15 @@ class Runner(multiprocessing.Process):
         self.logger.debug("  Looping process")
         # configured method from app
         self.start_time = time.time()
-        self.app_func()
+        ok = self.app_func()
 
-        # sleep process for some time
-        self.timeout(self.wakeup)
+        if not ok:
+          self.logger.debug("  App function failed to execute, sleeping %d"%self.sleep_time)
+          time.sleep(self.sleep_time)
+          continue
+        else:
+          # sleep process for some time
+          self.timeout(self.wakeup)
 
       self.logger.info("Runner has been ended")
     except Exception as inst:
