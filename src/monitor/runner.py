@@ -7,6 +7,7 @@ SLEEP_TIME = 5
 import multiprocessing
 import utilities
 import time
+import sys
 
 from pprint import pprint
 from signal import signal
@@ -62,10 +63,7 @@ class Runner(multiprocessing.Process):
   def signal_handler(self, sig):
     self.logger.info("  Handling runner signal")
     self.stop_running = True
-
-    # just kill the process
-    #import sys
-    #sys.exit(0)
+    self.logger.debug("  Stop running app")
 
   def run(self):
     '''
@@ -76,15 +74,14 @@ class Runner(multiprocessing.Process):
     try:
       self.logger.debug("  Running process")
       while not self.stop_running:
-        self.logger.debug("  Looping process")
+        self.logger.debug("  Looping process: [%s]"%str(self.stop_running))
         # configured method from app
         self.start_time = time.time()
         ok = self.app_func()
 
         if not ok:
-          self.logger.debug("  App function failed to execute, sleeping %d"%self.sleep_time)
+          self.logger.info("  App function failed to execute, sleeping %d"%self.sleep_time)
           time.sleep(self.sleep_time)
-          continue
         else:
           # sleep process for some time
           self.timeout(self.wakeup)
@@ -92,6 +89,8 @@ class Runner(multiprocessing.Process):
       self.logger.info("Runner has been ended")
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
+    finally:
+      sys.exit(1)
 
   def wakeup(self):
     try:
@@ -100,7 +99,4 @@ class Runner(multiprocessing.Process):
         self.logger.info("  Stopping runner")
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
-
-
-
-
+      
