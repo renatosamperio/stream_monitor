@@ -30,18 +30,17 @@ class QBitorrent(Runner):
       self.host        = None
       self.port        = None
       self.qb          = None
-      self.pause_old   = False
+      self.pause_expired   = False
       self.failed      = False
       self.preferences = None
       self.torrents    = None
       self.tries       = 3
       self.trackers    = None
-      self.timeout_days   = 30
+      self.timeout_days= 30
       self.torrents_state = {}
       self.new_trackers_available = True
       self.trackers_last = 0
       self.upd_trackers_period = 24*60*60
-      self.turn_off_time = 3600*24*self.timeout_days
       
       self.printed = [True, True, True, True, True, True, True, True, True, True]
       
@@ -55,10 +54,11 @@ class QBitorrent(Runner):
           self.host = kwargs[key]
         elif key == "port":
           self.port = kwargs[key]
-        elif key == "pause_old":
-          self.pause_old = kwargs[key]
+        elif key == "pause_expired":
+          self.pause_expired = kwargs[key]
         elif key == "timeout_days":
           self.timeout_days = kwargs[key]
+          self.turn_off_time = 3600*24 * self.timeout_days
 
       self.download_trackers(first_time = True)
       ok = self.connect()
@@ -100,7 +100,7 @@ class QBitorrent(Runner):
       progress = torrent['progress']
       if progress < 1:
         name = torrent['name']
-        # self.logger.debug("  + Looking for [%s]"%name)
+        self.logger.debug("    Looking for [%s]"%name)
         if 'download_path' in torrent and os.path.exists(torrent['download_path']):
           
           # get to know if file is already downloaded
@@ -110,18 +110,18 @@ class QBitorrent(Runner):
           if os.path.isfile(file_path) or os.path.exists(file_path):
             state = torrent['state']
             infohash = torrent["hash"]
+            progress = torrent['progress']
             
             # here we might be double checking if torrent is paused
-            if 'progress' in torrent and state.startswith("paused"):
-              suffix = "%3.2f%%"%(torrent['progress']*100)+ ' left'
-            # self.logger.debug("  +   [%s] torrent file found %s %s"%
-            #                   (state, name, suffix))
+            if state.startswith("paused") and progress < 1:
+              suffix = "%3.2f%%"%(progress*100)+ ' left'
+              self.logger.debug("      [%s] torrent file found %s %s"%
+                               (state, name, suffix))
           
             # there is already a torrent with the same name, let's try check it
             # not working: disappears torrent: 
             self.qb.recheck([infohash])
-            self.logger.debug("  +   [%s] torrent has been rechecked [%s]"%
-                              (state, name))
+            self.logger.info("  = = = [%s] Rechecked torrent [%s]"%(state, name))
           
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
@@ -189,7 +189,7 @@ class QBitorrent(Runner):
         infohash   = torrent["hash"]
         dlspeed    = torrent["dlspeed"]
         last_activity = torrent["last_activity"]
-        
+
         # if 'magnet_uri' in torrent:
         #   del torrent['magnet_uri']
         # pprint(torrent)
@@ -220,7 +220,7 @@ class QBitorrent(Runner):
           now = time.time() 
           time_since_last_activity = now - last_activity
           
-          if self.pause_old:
+          if self.pause_expired:
             has_not_been_around = dlspeed == 0 and \
                                   num_seeds == 0 and num_leechs == 0 and \
                                   time_since_last_activity >= self.turn_off_time
@@ -262,7 +262,7 @@ class QBitorrent(Runner):
 
   def pause_torrent(self, name, infohash):
     try:
-      self.logger.debug("Pausing torrent %s"%name)
+      self.logger.debug("    Pausing torrent %s"%name)
       self.qb.pause(infohash)
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
@@ -296,7 +296,7 @@ class QBitorrent(Runner):
         self.logger.warning("    Trackers not found to set")
         return False
 
-      self.logger.debug("    Setting trackers to %s"%name)
+      self.logger.debug("Setting trackers to %s"%name)
       self.qb.add_trackers(infohash, trackers)
       return True
     except Exception as inst:
@@ -349,7 +349,7 @@ if __name__ == '__main__':
                 action='store',
                 default=os.environ.get('QBIT_SLEEP'),
                 help='Input iterative timer')
-  run_time.add_option('--pause_old',
+  run_time.add_option('--pause_expired',
                 type="int",
                 action='store',
                 default=os.environ.get('QBIT_PAUSE'),
@@ -369,4 +369,3 @@ if __name__ == '__main__':
     parser.error("host name is required")
   #print(options)
   call_task(option_dict)
-
