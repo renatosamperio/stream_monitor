@@ -18,34 +18,152 @@ from datetime import timedelta
 
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-class QBitorrent(Runner):
+class TorrentState:
+  """
+  State should be defined by torrent hash as key
+  """
+  def __init__(self, **kwargs):
+    class_name  = self.__class__.__name__
+    self.logger = utilities.GetLogger(class_name)
+    self.status = {}
+  
+  def get_status(self, infohash):
+    if infohash in self.status:
+      return self.status[infohash]
+    else:
+      return None
+    
+  def set(self, torrent, trackers = None, set_functor = None):
+    try:
+      # getting torrent data
+      infohash   = torrent["hash"]
+      if infohash not in self.status or \
+          'update_trackers' not in self.get_status(infohash) or \
+          not self.get_status(infohash)['update_trackers']:
+  
+        # TODO: what if there is a new torrent without latest available trackers?
+        # set to update trackers
+        if infohash in self.status:
+          self.status[infohash]['update_trackers'] = True
+        else:
+          self.status.update({infohash:{'data' : torrent}})
+          self.status.update({infohash:{'update_trackers' : True}})
+        
+        # setting additional callback
+        if set_functor != None and trackers != None:
+          name = torrent["name"]
+          set_functor(name, infohash, trackers)
+        
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
 
+  def clean_all(self):
+    try:
+      for each in self.status.keys():
+        
+        # unset to release tracker update
+        self.status[each]
+        self.get_status(each)['update_trackers']  = False
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+
+  def print(self, torrent):
+    try:
+      
+      name       = torrent["name"]
+      progress   = torrent["progress"]
+      downloaded = torrent["downloaded"]
+      size       = torrent["size"]
+      state      = torrent["state"]
+      num_leechs = torrent["num_leechs"]
+      num_seeds  = torrent["num_seeds"]
+      dlspeed    = torrent["dlspeed"]
+
+      # state derivative variables
+      missing = utilities.human_readable_data(size - downloaded)
+      hDwldSpeed = utilities.human_readable_data(dlspeed)
+      is_downloading = "   " if dlspeed == 0 else " * "
+      progress_str = "%3.2f%%"%(progress*100)
+      
+      # send state to the logs
+      self.logger.info("%18s|%s|%7s|%9s/s|%9s| %3d/%3d | %s"%
+                        (state, is_downloading, progress_str, hDwldSpeed, 
+                        str(missing), num_seeds, num_leechs, name))
+      
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+
+class Trackers:
   def __init__(self, **kwargs):
     try:
-      # Initialising class variables
-      class_name       = self.__class__.__name__
-      self.logger      = utilities.GetLogger(class_name)
-      self.access      = None
-      self.user        = None
-      self.host        = None
-      self.port        = None
-      self.qb          = None
-      self.pause_expired   = False
-      self.failed      = False
-      self.preferences = None
-      self.torrents    = None
-      self.tries       = 3
-      self.trackers    = None
-      self.timeout_days= 30
-      self.torrents_state = {}
-      self.new_trackers_available = True
-      self.trackers_last = 0
-      self.upd_trackers_period = 24*60*60
+      class_name    = self.__class__.__name__
+      self.logger   = utilities.GetLogger(class_name)
+      self.update_trackers = 0
+      self.last_update = 0
+      self.data     = None
       
-      self.printed = [True, True, True, True, True, True, True, True, True, True]
+      # would always be the same?
+      self.URL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt"
       
       for key in kwargs.keys():
-        #print("---- key: %s"%key)
+        if key == "update_trackers":
+          self.update_trackers = kwargs[key]
+          
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+  
+  def wait(self):
+    update_now = True
+    try:
+      elapsed_time = time.time() - self.last_update
+      if elapsed_time < self.update_trackers:
+        self.logger.info("    Remaining time to download tracker: %.2f"%elapsed_time)
+        update_now = False
+        return
+
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+    finally:
+      return update_now
+    
+  def download(self, first_time = False):
+    try:
+      
+      self.logger.debug("    Downloading trackers")
+      response = requests.get(self.URL)
+      if response.status_code > 299:
+        self.logger.warning("Failed to contact trackers")
+        return
+
+      # collect trackers info as-it-is
+      self.data = response.content
+      self.last_update = time.time()
+      
+      # quick count of trackers
+      occurrences = str(self.data).count("\\n")
+      self.logger.debug("    Found %s trackers"%str(occurrences))
+      
+      # mark trackers to be loaded
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+
+  def get(self):
+    return self.data
+
+class QBitorrent:
+  def __init__(self, **kwargs):
+    class_name    = self.__class__.__name__
+    self.logger   = utilities.GetLogger(class_name)
+    self.qb       = None
+    self.access   = None
+    self.user     = None
+    self.host     = None
+    self.port     = None
+    self.timeout_secs  = 3600*24 * 365
+    self.pause_expired = False
+    
+    try:
+      for key in kwargs.keys():
         if key == "user":
           self.user = kwargs[key]
         elif key == "access":
@@ -54,24 +172,18 @@ class QBitorrent(Runner):
           self.host = kwargs[key]
         elif key == "port":
           self.port = kwargs[key]
-        elif key == "pause_expired":
-          self.pause_expired = kwargs[key]
         elif key == "timeout_days":
-          self.timeout_days = kwargs[key]
-          self.turn_off_time = 3600*24 * self.timeout_days
-
-      self.download_trackers(first_time = True)
-      ok = self.connect()
-      if ok: 
-        self.logger.debug("Created main object")
-      
-
-      # Initialising runner function
-      kwargs.update({"app_func" : self.update})
-      Runner.__init__(self, **kwargs)
-
+          self.timeout_secs = 3600*24 * kwargs[key]
+        elif key == "pause_expired":
+          self.pause_expired = bool(kwargs[key])
+    
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
+
+  def is_connected(self):
+    return self.qb and \
+           self.qb.verify and \
+           self.qb._is_authenticated
 
   def connect(self):
     sucess = True
@@ -83,12 +195,15 @@ class QBitorrent(Runner):
       self.qb.login(self.user, self.access)
 
       if not self.qb or not self.qb.verify or not self.qb._is_authenticated:
+        self.qb = None
         raise Exception("QBitorrent connnection failed")
+      
+      # go on if things went well!
       api_version = self.qb.api_version
       qbittorrent_version = self.qb.qbittorrent_version
       self.logger.info("Session established (%s, %s)."
         %(api_version, qbittorrent_version))
-      
+
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
       sucess = False
@@ -126,189 +241,192 @@ class QBitorrent(Runner):
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
 
-  def update(self):
-    shown = False
+  def pause_torrent(self, infohash):
     try:
-      if not self.qb:
-        # take a quick break
-        self.logger.info("Take a quick break before retrying [%d]"%self.tries)
-        time.sleep(5)
-        
-        self.tries -= 1
-        self.logger.info("Retrying to connect [%d]"%self.tries)
-        is_ok = self.connect()
-        
-        if self.tries < 1:
-          self.logger.error("Exiting, not connected")
-          self.signal_handler(signal.SIGTERM)
-          self.failed = True
-          return
-      
-      # updating trackers if required
-      self.download_trackers()
-
-      try:
-        if not self.qb:
-          is_ok = False
-          return
-        self.logger.debug("Collecting torrents info")
-        self.preferences = self.qb.preferences()
-        # filter: 'all' | 'downloading' | 'seeding'  | 'completed' |
-        #      'paused' | 'active'      | 'inactive' | 'resumed'   | 
-        #     'stalled' | 'stalled_uploading' | 'stalled_downloading' | 'errored';
-        self.torrents = self.qb.torrents()
-
-      # stop here if something had failed in connection
-      except requests.exceptions.HTTPErr as inst:
-        self.qb.logout()
-        self.qb = None
-        is_ok = False
-        self.logger.warning("Error: Cannot get preferences, restting client")
-        return 
-      except Exception as inst:
-        self.qb.logout()
-        self.qb = None
-        is_ok = False
-        utilities.ParseException(inst, logger=self.logger)
-        return 
-        
-      has_set_trackers = False
-      for torrent in self.torrents:
-        
-        # if not shown:
-        #   pprint(torrent.keys())
-        #   shown = True
-
-        progress   = torrent["progress"]
-        downloaded = torrent["downloaded"]
-        size       = torrent["size"]
-        state      = torrent["state"]
-        name       = torrent["name"]
-        num_leechs = torrent["num_leechs"]
-        num_seeds  = torrent["num_seeds"]
-        infohash   = torrent["hash"]
-        dlspeed    = torrent["dlspeed"]
-        last_activity = torrent["last_activity"]
-
-        # if 'magnet_uri' in torrent:
-        #   del torrent['magnet_uri']
-        # pprint(torrent)
-        # print("* "*50)
-        
-        # if not state.startswith("paused"):
-        #   if self.printed[0]:
-        #     print("+ "*50)
-        #     pprint(torrent)
-        #     print("+ "*50)
-        #     self.printed[0] = False
-     
-        # get to find paused files
-        if state.startswith("paused"):
-          self.find_file(torrent)
-        
-        # pause on going ones
-        if not state.startswith("paused"):
-            
-          missing = utilities.human_readable_data(size - downloaded)
-          hDwldSpeed = utilities.human_readable_data(int(dlspeed))
-          is_downloading = "   " if dlspeed == 0 else " * "
-          progress_str = "%3.2f%%"%(progress*100)
-          
-          # should we turn off some of the torrents? Only if it is not downloading,
-          # if it would not have seeds nor leeches and hasn't been active for more
-          # than a week
-          now = time.time() 
-          time_since_last_activity = now - last_activity
-          
-          if self.pause_expired:
-            has_not_been_around = dlspeed == 0 and \
-                                  num_seeds == 0 and num_leechs == 0 and \
-                                  time_since_last_activity >= self.turn_off_time
-
-            # turn of torrents that hasn't been available 
-            # for more than a week
-            if has_not_been_around:
-              elapsed_datetime = str(timedelta(seconds=time_since_last_activity))
-              self.logger.info("  = = = Turning off torrent [%s] off since %s"%(name, elapsed_datetime))
-              self.pause_torrent(name, infohash)
-            
-          # send state to the logs
-          self.logger.info("%18s|%s|%7s|%9s/s|%9s| %3d/%3d | %s"%
-                           (state, is_downloading, progress_str, hDwldSpeed, 
-                            str(missing), num_seeds, num_leechs, name))
-          
-          # setting trackers if it would be time
-          if self.new_trackers_available and progress < 1:
-            has_set_trackers = self.set_trackers(name, infohash, self.trackers)
-            if infohash in self.torrents_state:
-              self.torrent_state.update({infohash: time.time()})
-
-          # pausing if it is finished
-          elif progress == 1 and not state.startswith("moving"):
-            self.logger.info("  = = = Pausing finished torrent [%s]"%(name))
-            self.pause_torrent(name, infohash)
-        
-      # allow all trackers to be defined and avoid updating on next call
-      if has_set_trackers:
-        self.new_trackers_available = False
-      
-      # return status
-      is_ok = True
-    except Exception as inst:
-      utilities.ParseException(inst, logger=self.logger)
-      is_ok = False
-    finally:
-      return is_ok
-
-  def pause_torrent(self, name, infohash):
-    try:
-      self.logger.debug("    Pausing torrent %s"%name)
       self.qb.pause(infohash)
-    except Exception as inst:
-      utilities.ParseException(inst, logger=self.logger)
-
-  def download_trackers(self, first_time = False):
-    try:
-      elapsed_time = time.time() - self.trackers_last
-      cond = first_time or elapsed_time < self.upd_trackers_period
-      if first_time or elapsed_time < self.upd_trackers_period:
-        self.logger.info("    Remaining time to download tracker: %.2f"%elapsed_time)
-        return
-
-      self.logger.debug("    Downloading trackers")
-      URL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt"
-      response = requests.get(URL)
-      if response.status_code > 299:
-        self.logger.warning("Failed to contact trackers")
-        return
-
-      self.trackers = response.content
-      self.new_trackers_available = True
-      self.trackers_last = time.time()
-      occurrences = str(self.trackers).count("\\n")
-      self.logger.debug("    Found %s trackers"%str(occurrences))
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
 
   def set_trackers(self, name, infohash, trackers):
     try:
-      if self.trackers == None:
-        self.logger.warning("    Trackers not found to set")
+      if trackers == None:
+        self.logger.warning("    Failed to set trackers into %s"%name)
         return False
 
-      self.logger.debug("Setting trackers to %s"%name)
       self.qb.add_trackers(infohash, trackers)
+      self.logger.debug("    Set trackers into %s"%name)
       return True
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
 
+  def resurme_torrent(self, name, infohash):
+    try:
+      self.logger.debug("    Resuming torrent %s"%name)
+      self.qb.resume(infohash)
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+
+  def get_torrents(self):
+    torrents = None
+    try:
+      torrents = self.qb.torrents()
+    except Exception as inst:
+      self.logger.warning("Failed to collect torrents")
+      utilities.ParseException(inst, logger=self.logger)
+    finally:
+      return torrents
+
+  def update(self, torrent):
+    try:
+      
+      progress = torrent["progress"]
+      state = torrent["state"]
+      name = torrent["name"]
+      infohash = torrent["hash"]
+      dlspeed = int(torrent["dlspeed"])
+      num_seeds = torrent["num_seeds"]
+      num_leechs = torrent["num_leechs"]
+      last_activity = torrent["last_activity"]
+      time_since_last_activity = time.time() - last_activity
+      
+      # 1. Pause if it is already done
+      if progress == 1 and \
+         not state.startswith("moving") and \
+         not state.startswith("paused"):
+          self.logger.info("  = = = Pausing finished [%s]"%(name))
+          self.pause_torrent(infohash)
+      # 2. Pause if it expired
+      elif self.pause_expired and dlspeed == 0 and \
+          num_seeds == 0 and num_leechs == 0 and \
+          time_since_last_activity >= self.timeout_secs:
+        
+        elapsed_datetime = str(timedelta(seconds=time_since_last_activity))
+        self.logger.info("  = = = Turning off torrent [%s] off since %s"%
+                         (name, elapsed_datetime))
+        self.pause_torrent(infohash)
+
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+    
+class StateController:
+  def __init__(self, **kwargs):
+    try:
+      self.i = 0
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+    
+class QBitorrentRunner(Runner):
+  def __init__(self, **kwargs):
+    class_name  = self.__class__.__name__
+    self.logger = utilities.GetLogger(class_name)
+    self.config = kwargs
+
+    try:
+      self.logger.info("Creating QBitorrent object")
+      self.client   = QBitorrent(**kwargs)
+      self.trackers = Trackers(**kwargs)
+      self.state    = TorrentState(**kwargs)
+  
+      self.set_runner(kwargs, self.connected)
+      Runner.__init__(self, **kwargs)
+
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+
+  def set_runner(self, kwargs, funct):
+    '''
+      Set function for runner
+    '''
+    try:
+      self.logger.info("Setting runner function")
+      # Initialising runner function
+      if "app_func" not in kwargs:
+        kwargs.update({"app_func" : funct})
+      else:
+        self.logger.info("Setting new app function")
+        kwargs["app_func"] = funct
+        self.app_func = funct
+      
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+    finally:
+      return kwargs
+
+  def connected(self):
+    is_connected = True
+    try:
+      self.logger.debug("Connecting QBitorrent client ...")
+      if not self.client.is_connected():
+        # set a quick swapping of app functions, otherwise it will sleep
+        self.time_out = 0
+        
+        # try to connect client by setting up a client connection
+        if self.client.connect():
+          
+          # once connected, swap runner function to update function
+          self.logger.debug("Connected. Changing runner ...")
+          self.set_runner(self.config, self.update)
+          
+          # setting back timeout after swapping update function
+          self.time_out = self.config['time_out']
+        else:
+          self.logger.warning("Failed to connect client")
+      else:
+        self.logger.debug("Qbittorrent client is already connected")
+  
+    except Exception as inst:
+      is_connected = False
+      utilities.ParseException(inst, logger=self.logger)
+    finally:
+      return is_connected
+
+  def update(self):
+    is_ok = True
+    sum_dlspeed = 0
+    try:
+      
+      # Collect trackers every now and then...
+      if self.trackers.wait():
+        self.trackers.download()
+        self.state.clean_all()
+      trackers = self.trackers.get()
+      
+      # get into each torrent
+      self.logger.info("Updating client state...")
+      torrents = self.client.get_torrents()
+      if not torrents:
+        is_ok = False
+        return
+      
+      # get torrents info
+      for torrent in torrents:
+        
+        # print current torrent state
+        self.state.print(torrent)
+        
+        # mark trackers to general status
+        self.state.set(torrent, trackers, self.client.set_trackers)
+        
+        # update state based on current status
+        self.client.update(torrent)
+        
+        # accumulating download speed
+        dlspeed = torrent["dlspeed"]
+        if dlspeed>0: sum_dlspeed += dlspeed
+        
+      self.logger.info("  = = = Accumulated download speed: %s"%
+                       utilities.human_readable_data(sum_dlspeed))
+        
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+    finally:
+      return is_ok
+      
 ## Process management methods
 def call_task(options):
   ''' Command line method for running sniffer service'''
   try:
-
-    monitor = QBitorrent(**options)
-
+    monitor = QBitorrentRunner(**options)
   except Exception as inst:
       utilities.ParseException(inst, logger=logger)
 
@@ -317,7 +435,6 @@ if __name__ == '__main__':
   logging.basicConfig(format=logFormatter, level=logging.DEBUG)
   logger = utilities.GetLogger(LOG_NAME)
   logger.debug('Logger created.')
-  
   usage       = "usage: %prog option1=string option2=bool"
   parser      = OptionParser(usage=usage)
 
@@ -344,11 +461,21 @@ if __name__ == '__main__':
                 help='Input qbitorrent port')
 
   run_time = OptionGroup(parser, "Runtime options")
+  run_time.add_option('--update_trackers',
+                type="int",
+                action='store',
+                default=os.environ.get('QBIT_UPD_TRCKERS'),
+                help='Input period to update trackers')
   run_time.add_option('--time_out',
                 type="int",
                 action='store',
-                default=os.environ.get('QBIT_SLEEP'),
+                default=os.environ.get('QBIT_TIMEOUT'),
                 help='Input iterative timer')
+  run_time.add_option('--sleep_time',
+                type="int",
+                action='store',
+                default=os.environ.get('QBIT_SLEEP'),
+                help='Input runner sleep time')
   run_time.add_option('--pause_expired',
                 type="int",
                 action='store',
@@ -367,5 +494,6 @@ if __name__ == '__main__':
 
   if not options.host:
     parser.error("host name is required")
-  #print(options)
+  # print(options)
+  
   call_task(option_dict)
