@@ -307,14 +307,7 @@ class QBitorrent:
 
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
-    
-class StateController:
-  def __init__(self, **kwargs):
-    try:
-      self.i = 0
-    except Exception as inst:
-      utilities.ParseException(inst, logger=self.logger)
-    
+
 class QBitorrentRunner(Runner):
   def __init__(self, **kwargs):
     class_name  = self.__class__.__name__
@@ -327,7 +320,7 @@ class QBitorrentRunner(Runner):
       self.trackers = Trackers(**kwargs)
       self.state    = TorrentState(**kwargs)
   
-      self.set_runner(kwargs, self.connected)
+      self.set_runner(kwargs, self.update)
       Runner.__init__(self, **kwargs)
 
     except Exception as inst:
@@ -357,22 +350,15 @@ class QBitorrentRunner(Runner):
     try:
       self.logger.debug("Connecting QBitorrent client ...")
       if not self.client.is_connected():
-        # set a quick swapping of app functions, otherwise it will sleep
-        self.time_out = 0
         
         # try to connect client by setting up a client connection
         if self.client.connect():
+          self.logger.debug(" Qbittorrent connected!")
           
-          # once connected, swap runner function to update function
-          self.logger.debug("Connected. Changing runner ...")
-          self.set_runner(self.config, self.update)
-          
-          # setting back timeout after swapping update function
-          self.time_out = self.config['time_out']
         else:
-          self.logger.warning("Failed to connect client")
+          self.logger.warning(" Failed to connect client")
       else:
-        self.logger.debug("Qbittorrent client is already connected")
+        self.logger.debug(" Qbittorrent client is already connected")
   
     except Exception as inst:
       is_connected = False
@@ -384,6 +370,11 @@ class QBitorrentRunner(Runner):
     is_ok = True
     sum_dlspeed = 0
     try:
+      
+      # Connect to server first
+      if not self.connected():
+        is_ok = False
+        return
       
       # Collect trackers every now and then...
       if self.trackers.wait():
