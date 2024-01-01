@@ -147,7 +147,7 @@ if __name__ == '__main__':
     logFormatter="'%(asctime)s|%(levelname)7s|%(name)25s|%(message)s'"
     logging.basicConfig(format=logFormatter, level=logging.DEBUG)
     logger = utilities.GetLogger(LOG_NAME)
-    logger.debug('Logger created.')
+    logger.debug('Logger created [1.0].')
     
     usage       = "usage: %prog source=string dest=bool"
     parser      = OptionParser(usage=usage)
