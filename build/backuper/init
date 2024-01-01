@@ -1,0 +1,4 @@
+#!/bin/bash
+
+echo "Running stream monitor..."
+python /opt/stream_monitor/backuper/app.py
