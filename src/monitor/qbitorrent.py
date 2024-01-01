@@ -14,7 +14,7 @@ from runner import Runner
 from optparse import OptionParser, OptionGroup
 from qbittorrent import Client
 from pprint import pprint
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
@@ -26,13 +26,38 @@ class TorrentState:
     class_name  = self.__class__.__name__
     self.logger = utilities.GetLogger(class_name)
     self.status = {}
+    self.update_trackers = 0
+    for key in kwargs.keys():
+      if key == "update_trackers":
+        self.trackers_timeout = kwargs[key]
   
   def get_status(self, infohash):
     if infohash in self.status:
       return self.status[infohash]
     else:
       return None
-    
+  
+  def set_status(self, torrent):
+    try:
+      infohash = torrent["hash"]
+      name = torrent["name"]
+      self.logger.debug("    Added torrent status to [%s]"%name)
+      self.status.update({infohash:torrent})
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+
+  def update_tracker_ts(self, torrent):
+    try:
+
+      infohash = torrent["hash"]
+      name = torrent["name"]
+      self.logger.debug("    Added trackers to status [%s]"%name)
+      ts = datetime.timestamp(datetime.now())
+      self.status[infohash].update({'last_update_trackers' : ts})
+
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+
   def set(self, torrent, trackers = None, set_functor = None):
     try:
       # getting torrent data
@@ -51,8 +76,7 @@ class TorrentState:
         
         # setting additional callback
         if set_functor != None and trackers != None:
-          name = torrent["name"]
-          set_functor(name, infohash, trackers)
+          set_functor(torrent, trackers)
         
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
@@ -247,8 +271,10 @@ class QBitorrent:
     except Exception as inst:
       utilities.ParseException(inst, logger=self.logger)
 
-  def set_trackers(self, name, infohash, trackers):
+  def set_trackers(self, torrent, trackers):
     try:
+      infohash = torrent["hash"]
+      name = torrent["name"]
       if trackers == None:
         self.logger.warning("    Failed to set trackers into %s"%name)
         return False
@@ -366,6 +392,29 @@ class QBitorrentRunner(Runner):
     finally:
       return is_connected
 
+  def updated_torrent_trackers(self, torrent, trackers):
+    try:
+        # getting torrent identifier
+        infohash = torrent["hash"]
+        state = self.state.status
+        if infohash in state:
+          if 'last_update_trackers' in state[infohash]:
+            last_update_trackers = state[infohash]['last_update_trackers']
+            is_time = datetime.timestamp(datetime.now()) - last_update_trackers
+            
+            if is_time >= self.state.trackers_timeout:
+              self.state.update_tracker_ts(torrent)
+              self.client.set_trackers(torrent, trackers)
+          else:
+            self.update_tracker(torrent)
+        else:
+          self.state.set_status(torrent)
+          self.state.update_tracker_ts(torrent)
+          self.client.set_trackers(torrent, trackers)
+          
+    except Exception as inst:
+      utilities.ParseException(inst, logger=self.logger)
+
   def update(self):
     is_ok = True
     sum_dlspeed = 0
@@ -396,7 +445,8 @@ class QBitorrentRunner(Runner):
         self.state.print(torrent)
         
         # mark trackers to general status
-        self.state.set(torrent, trackers, self.client.set_trackers)
+        # self.state.set(torrent, trackers, self.client.set_trackers)
+        self.updated_torrent_trackers(torrent, trackers)
         
         # update state based on current status
         self.client.update(torrent)
